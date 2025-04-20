@@ -1,131 +1,215 @@
 import socket
 import pydirectinput
+import json
+import time
+import sys # Import sys for flushing output
 
 # Configuration
 PORT = 5005  # Port to listen on
 BUFFER_SIZE = 1024  # Maximum size of incoming UDP packets
-COMMAND_TO_KEY_MAPPING = {
-    # Flight / Systems
-    "FlightReady":          ['altright', 'r'], # Default Flight Ready seems to be RAlt+R
-    "Engines_Toggle":       'i',               # Toggle Engines Power (Matches Engines_Toggle)
-    "Shields_Toggle":       'o',               # Toggle Shields Power
-    "Weapons_Toggle":       'p',               # Toggle Weapons Power
-    "Lights":               'l',               # Toggle Lights
-    "LandingGear":          'n',               # Toggle Landing Gear
-    "Decoupled":            'c',               # Toggle Decoupled Mode (HOLD C often, but press might work)
-    "VTOL":                 'k',               # Toggle VTOL Mode
-    "Cruise":               ['altright', 'c'], # Toggle Cruise Control (RAlt+C seems common)
 
-    # Quantum Travel
-    "Quantum_Spool":        'b',               # Tap B often toggles QT mode / starts spool
-    "Quantum_Engage":       'b',               # HOLD B engages - pydirectinput.press('b') might work, or need hold logic later
+def execute_key_event(data):
+    """Handles 'key_event' actions (keyboard keys only) from the parsed JSON data."""
+    key = data.get('key')
+    modifiers = data.get('modifiers', []) # Default to empty list
+    press_type_data = data.get('pressType', {}) # Default to empty dict
+    press_type = press_type_data.get('type', 'tap') # Default to 'tap'
+    duration_ms = press_type_data.get('durationMs') # Will be None if type is 'tap'
 
-    # Scanning
-    "ScanMode":             'v',               # Toggle Scan Mode
-    "Scan_Ping":            'tab',             # Activate Ping (often TAB)
+    if not key:
+        print("    -> Error: 'key' field missing in key_event data.")
+        return
 
-    # Targeting (Based on common defaults / 3.23 notes)
-    "Target_Hostile_Nearest": 't',             # Target nearest hostile / cycle forward
-    "Target_Friendly_Nearest": '6',            # Cycle friendlies forward (no direct "nearest")
-    "Target_Pin":           None,              # No clear universal default - Map in SC or assign key here
-    "Target_Subcomponent_Reset": ['altleft', 'r'], # Reset subtarget targeting
+    # --- Modifier Key Handling ---
+    # Press down all modifier keys FIRST
+    for mod_key in modifiers:
+        try:
+            pydirectinput.keyDown(mod_key)
+        except Exception as mod_e:
+            print(f"    -> Warning: Failed to press down modifier '{mod_key}': {mod_e}")
 
-    # Countermeasures
-    "CM_Launch_Decoy":      'h',               # Launch Decoy burst
-    "CM_Launch_Noise":      'j',               # Launch Noise
-    "CM_Panic":             ['h', 'j'],        # Example: Press both Decoy and Noise for Panic
+    # --- Main Action Execution (Keyboard Keys Only) ---
+    try:
+        # Handle as standard Keyboard Key Action
+        if press_type == 'tap':
+            print(f"    -> Simulating key tap: '{key}' with modifiers {modifiers}")
+            pydirectinput.press(key) # Modifiers already held
+        elif press_type == 'hold' and duration_ms is not None:
+            duration_sec = duration_ms / 1000.0
+            if duration_sec <= 0:
+                print(f"    -> Warning: Invalid hold duration ({duration_ms}ms) for key '{key}'. Performing tap instead.")
+                pydirectinput.press(key) # Modifiers already held
+            else:
+                print(f"    -> Simulating key hold: '{key}' for {duration_sec:.2f}s with modifiers {modifiers}")
+                pydirectinput.keyDown(key) # Modifiers already held
+                time.sleep(duration_sec)
+                pydirectinput.keyUp(key)
+        else:
+            print(f"    -> Warning: Invalid pressType ('{press_type}') or missing durationMs for key '{key}'. Performing tap.")
+            pydirectinput.press(key) # Modifiers already held
 
-    # Emergency
-    "Eject":                ['altright', 'y'], # Default Eject seems to be RAlt+Y
-    "SelfDestruct":         'backspace',       # HOLD Backspace - press might initiate, need hold logic later
+    except Exception as action_e:
+        print(f"    -> Error executing action for key '{key}': {action_e}")
+    finally: # Ensure modifiers are released even if action fails
+        # --- Modifier Key Handling (Release) ---
+        # Release modifiers AFTER main action is done
+        for mod_key in reversed(modifiers):
+            try:
+                pydirectinput.keyUp(mod_key)
+            except Exception as mod_e:
+                print(f"    -> Warning: Failed to release modifier '{mod_key}': {mod_e}")
 
-    # ATC / Doors
-    "Request_Landing":      ['altleft', 'n'],  # Request Landing Clearance
-    "Doors":                None,              # No clear universal default for general 'Doors' - Map in SC
 
-    # Power Management (+/- Power commands from app)
-    # Default SC uses F5-F8 for presets or Numpad for shield facings.
-    # Direct "+/- Power" isn't standard. Mapping these conceptually:
-    "Weapons_IncreasePower": ['f7'],             # Conceptual: Set Power to Weapons Preset
-    "Weapons_DecreasePower": ['f8'],             # Conceptual: Reset Power Triangle
-    "Shields_IncreasePower": ['f6'],             # Conceptual: Set Power to Shields Preset
-    "Shields_DecreasePower": ['f8'],             # Conceptual: Reset Power Triangle
-    "Engines_IncreasePower": ['f5'],             # Conceptual: Set Power to Engines Preset
-    "Engines_DecreasePower": ['f8'],             # Conceptual: Reset Power Triangle
-    # Coolers don't have direct power toggle/presets typically bound
-    "Coolers_Toggle":       None,
-    "Coolers_IncreasePower":None,
-    "Coolers_DecreasePower":None,
+def execute_mouse_event(data):
+    """Handles 'mouse_event' actions from the parsed JSON data."""
+    button_str = data.get('button')
+    press_type_data = data.get('pressType', {})
+    press_type = press_type_data.get('type', 'tap')
+    duration_ms = press_type_data.get('durationMs')
+    modifiers = data.get('modifiers', []) # Get modifiers list
 
-    # Other (if needed)
-    # Add any other commands sent by your specific app layout here
-}
+    # Map button string from JSON ("LEFT", "RIGHT", "MIDDLE") to pydirectinput names
+    button_map = {
+        "LEFT": "left",
+        "RIGHT": "right",
+        "MIDDLE": "middle"
+    }
+    button = button_map.get(button_str)
+
+    if not button:
+        print(f"    -> Error: Invalid or missing 'button' field ('{button_str}') in mouse_event data.")
+        return
+
+    # --- Modifier Key Handling ---
+    # Hold keyboard modifiers if present
+    for mod_key in modifiers:
+        try:
+            pydirectinput.keyDown(mod_key)
+            print(f"    -> Holding modifier: {mod_key}")
+        except Exception as mod_e:
+            print(f"    -> Warning: Failed to press down modifier '{mod_key}': {mod_e}")
+
+    # --- Main Mouse Action ---
+    try:
+        if press_type == 'tap':
+            print(f"    -> Simulating mouse click: '{button}' button with modifiers {modifiers}")
+            pydirectinput.click(button=button)
+        elif press_type == 'hold' and duration_ms is not None:
+            duration_sec = duration_ms / 1000.0
+            if duration_sec <= 0:
+                 print(f"    -> Warning: Invalid hold duration ({duration_ms}ms) for mouse button '{button}'. Performing click instead.")
+                 pydirectinput.click(button=button)
+            else:
+                print(f"    -> Simulating mouse hold: '{button}' button for {duration_sec:.2f}s with modifiers {modifiers}")
+                pydirectinput.mouseDown(button=button)
+                time.sleep(duration_sec)
+                pydirectinput.mouseUp(button=button)
+        else:
+             print(f"    -> Warning: Invalid pressType ('{press_type}') or missing durationMs for mouse button '{button}'. Performing click.")
+             pydirectinput.click(button=button)
+
+    except Exception as mouse_e:
+        print(f"    -> Error executing mouse action for button '{button}': {mouse_e}")
+    finally:
+        # --- Modifier Key Handling (Release) ---
+        # Release keyboard modifiers if they were held
+        for mod_key in reversed(modifiers):
+            try:
+                pydirectinput.keyUp(mod_key)
+                print(f"    -> Releasing modifier: {mod_key}")
+            except Exception as mod_e:
+                print(f"    -> Warning: Failed to release modifier '{mod_key}': {mod_e}")
+
+
+def execute_mouse_scroll(data):
+    """Handles 'mouse_scroll' actions from the parsed JSON data."""
+    direction = data.get('direction')
+    clicks = data.get('clicks', 1) # Default to 1 click if not specified
+    modifiers = data.get('modifiers', []) # Get modifiers list
+
+    if direction == "UP":
+        scroll_amount = clicks
+    elif direction == "DOWN":
+        scroll_amount = -clicks # Negative value for scrolling down
+    else:
+        print(f"    -> Error: Invalid or missing 'direction' field ('{direction}') in mouse_scroll data.")
+        return
+
+    # --- Modifier Key Handling ---
+    for mod_key in modifiers:
+        try:
+            pydirectinput.keyDown(mod_key)
+            print(f"    -> Holding modifier: {mod_key}")
+        except Exception as mod_e:
+            print(f"    -> Warning: Failed to press down modifier '{mod_key}': {mod_e}")
+
+    # --- Main Scroll Action ---
+    try:
+        print(f"    -> Simulating mouse scroll: direction '{direction}', clicks {clicks} (amount {scroll_amount}) with modifiers {modifiers}")
+        pydirectinput.scroll(scroll_amount)
+    except Exception as scroll_e:
+         print(f"    -> Error executing mouse scroll: {scroll_e}")
+    finally:
+        # --- Modifier Key Handling (Release) ---
+        for mod_key in reversed(modifiers):
+            try:
+                pydirectinput.keyUp(mod_key)
+                print(f"    -> Releasing modifier: {mod_key}")
+            except Exception as mod_e:
+                print(f"    -> Warning: Failed to release modifier '{mod_key}': {mod_e}")
+
 
 def main():
     # Create a UDP socket
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    
+
     try:
         # Bind the socket to all available network interfaces and the specified port
         server_socket.bind(('0.0.0.0', PORT))
-        print(f"UDP server is listening on port {PORT}...")
-        
+        print(f"UDP server listening on port {PORT}...")
+        sys.stdout.flush() # Ensure print statements appear immediately
+
         while True:
-            # Inside the main while True loop, after decoding the command:
             try:
                 # Wait for a UDP packet
-                data, addr = server_socket.recvfrom(BUFFER_SIZE)
-                command = data.decode('utf-8').strip()
-                print(f"Received command: '{command}' from {addr}")
+                data_bytes, addr = server_socket.recvfrom(BUFFER_SIZE)
+                json_string = data_bytes.decode('utf-8').strip()
+                print(f"\nReceived raw data: '{json_string}' from {addr}")
+                sys.stdout.flush()
 
-                # Look up the key(s) for the command using .get() for safety
-                keys_to_press = COMMAND_TO_KEY_MAPPING.get(command) # Use .get()
+                # Parse the JSON string
+                try:
+                    action_data = json.loads(json_string)
+                except json.JSONDecodeError as json_e:
+                    print(f"    -> Error: Invalid JSON received: {json_e}")
+                    continue # Skip to the next packet
 
-                if keys_to_press is not None:
-                    if isinstance(keys_to_press, list) and len(keys_to_press) > 0:
-                        # Handle key combinations using keyDown/keyUp
-                        modifier_keys = keys_to_press[:-1] # All keys except the last one are modifiers
-                        main_key = keys_to_press[-1]       # The last key is the main one to press
+                # Determine action type and execute
+                action_type = action_data.get('type')
 
-                        print(f"    -> Simulating combination: Hold {modifier_keys}, Press '{main_key}'")
-
-                        # Press down modifier keys
-                        for mod_key in modifier_keys:
-                            pydirectinput.keyDown(mod_key)
-                            # time.sleep(0.01) # Optional small delay
-
-                        # Press and release the main key
-                        pydirectinput.press(main_key)
-                        # time.sleep(0.01) # Optional small delay
-
-                        # Release modifier keys in reverse order (good practice)
-                        for mod_key in reversed(modifier_keys):
-                            pydirectinput.keyUp(mod_key)
-                            # time.sleep(0.01) # Optional small delay
-                    elif isinstance(keys_to_press, str):
-                        # Handle single key press
-                        print(f"    -> Simulating key press: '{keys_to_press}'")
-                        pydirectinput.press(keys_to_press)
-                    else:
-                        # Should not happen with a well-formed dictionary, but good practice
-                        print(f"    -> Warning: Invalid key type '{type(keys_to_press)}' in mapping for command '{command}'")
-                # Handle commands explicitly mapped to None (no action)
-                elif command in COMMAND_TO_KEY_MAPPING: # Check if key exists but value is None
-                     print(f"    -> Info: Command '{command}' is configured for no action (None).")
-                # Handle commands not found in the dictionary at all
+                if action_type == 'key_event':
+                    execute_key_event(action_data)
+                elif action_type == 'mouse_event':
+                    execute_mouse_event(action_data)
+                elif action_type == 'mouse_scroll':
+                    execute_mouse_scroll(action_data) # Now handles modifiers
                 else:
-                    print(f"    -> Warning: Command '{command}' not found in key mapping.")
-                    
+                    print(f"    -> Warning: Unknown action type '{action_type}' received.")
+
             except UnicodeDecodeError:
-                print(f"Error: Received data from {addr} could not be decoded as UTF-8.")
-            except Exception as e:
-                print(f"Error processing command from {addr}: {e}")
-    
+                print(f"    -> Error: Received data from {addr} could not be decoded as UTF-8.")
+            except Exception as loop_e:
+                # Catch other potential errors within the loop (e.g., network issues)
+                print(f"    -> Error processing packet from {addr}: {loop_e}")
+
+            sys.stdout.flush() # Flush output buffer after processing each packet
+
     except Exception as e:
-        print(f"Failed to start server: {e}")
+        print(f"\nCritical error: Failed to start or run server: {e}")
     finally:
         server_socket.close()
-        print("Server socket closed.")
+        print("\nServer socket closed.")
+        sys.stdout.flush()
 
 if __name__ == "__main__":
     main()
