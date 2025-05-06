@@ -3,19 +3,21 @@ import pydirectinput
 import json
 import time
 import sys
-import threading # Added threading
-import ipaddress # Added ipaddress for network calculations
+import threading
+import ipaddress
+from zeroconf import ServiceInfo, Zeroconf, IPVersion # Added zeroconf imports
+import signal # Added signal for graceful shutdown
 
-# --- Existing Configuration ---
-PORT = 5005  # Port to listen on for commands
+# --- Configuration ---
+COMMAND_PORT = 5005  # Port for receiving commands
 BUFFER_SIZE = 1024
-# --- New Discovery Configuration ---
-DISCOVERY_PORT = 5006 # Port for broadcasting/listening for discovery
-DISCOVERY_MESSAGE = b"STARBUTTONBOX_SERVER_DISCOVERY" # Unique message (Not strictly needed for broadcast response)
-BROADCAST_INTERVAL_SEC = 5 # How often to broadcast
+# --- mDNS Configuration ---
+MDNS_SERVICE_TYPE = "_starbuttonbox._udp.local." # Standard service type format
+MDNS_SERVICE_NAME = "StarButtonBox Server._starbuttonbox._udp.local." # Unique name for this instance
 
 # --- Existing execute_key_event, execute_mouse_event, execute_mouse_scroll functions ---
-
+# [ ... keep existing functions execute_key_event, execute_mouse_event, execute_mouse_scroll ... ]
+# Ensure they use sys.stdout.flush() after prints if needed for immediate feedback.
 def execute_key_event(data):
     """Handles 'key_event' actions (keyboard keys only) from the parsed JSON data."""
     key = data.get('key')
@@ -191,106 +193,125 @@ def execute_mouse_scroll(data):
                 print(f"    -> Warning: Failed to release modifier '{mod_key}': {mod_e}")
                 sys.stdout.flush()
 
-
-# --- New Discovery Broadcast Function ---
-def broadcast_discovery(stop_event):
-    """Periodically broadcasts a discovery message containing the command port."""
-    broadcast_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-    broadcast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    broadcast_socket.settimeout(0.2) # Set a timeout so the loop can check stop_event
-
-    # Prepare the JSON payload containing the command port
-    message_payload = json.dumps({"type": "discovery_response", "port": PORT}).encode('utf-8')
-
-    print(f"Discovery broadcast thread started. Broadcasting on port {DISCOVERY_PORT} every {BROADCAST_INTERVAL_SEC} seconds.")
-    sys.stdout.flush()
-
-    # --- Attempt to find broadcast address (more robust) ---
-    broadcast_address = '<broadcast>' # Default to generic broadcast
+# --- Function to get a non-loopback IP address ---
+def get_local_ip():
+    """Attempts to find a non-loopback local IP address."""
     try:
-        # Get hostname
-        hostname = socket.gethostname()
-        # Get all IP addresses for the hostname
-        # Using socket.getaddrinfo for better compatibility (IPv4/IPv6)
-        ip_addresses = socket.getaddrinfo(hostname, None)
-        # Filter for IPv4 addresses
-        ipv4_addresses = [addr[4][0] for addr in ip_addresses if addr[0] == socket.AF_INET]
-
-        # Find a non-loopback IPv4 address and calculate its broadcast address
-        for ip_str in ipv4_addresses:
-            if not ip_str.startswith('127.'):
-                try:
-                    # Try common subnet masks
-                    masks_to_try = ['/24', '/16', '/8'] # Common masks
-                    found_mask = False
-                    for mask_str in masks_to_try:
-                        try:
-                            iface = ipaddress.IPv4Interface(f"{ip_str}{mask_str}")
-                            broadcast_address = str(iface.network.broadcast_address)
-                            print(f"  -> Determined broadcast address: {broadcast_address} (from IP: {ip_str}, mask: {mask_str})")
-                            sys.stdout.flush()
-                            found_mask = True
-                            break # Found a valid one for this IP
-                        except ValueError:
-                            continue # Try next mask if current one is invalid for the IP
-                    if found_mask:
-                        break # Found broadcast address for one of the IPs, stop checking others
-                except Exception as ip_err:
-                    print(f"  -> Warning: Error determining broadcast address for {ip_str}: {ip_err}")
-                    sys.stdout.flush()
-                    continue # Try next IP if error
-
-        if broadcast_address == '<broadcast>':
-            print("  -> Warning: Could not determine specific broadcast address, using generic '<broadcast>'. Discovery might be less reliable.")
-            sys.stdout.flush()
-
-    except socket.gaierror as e:
-        print(f"  -> Warning: Could not get local IP address information: {e}. Using generic broadcast address.")
-        sys.stdout.flush()
-    except Exception as e:
-         print(f"  -> Warning: An unexpected error occurred during broadcast address lookup: {e}. Using generic broadcast address.")
-         sys.stdout.flush()
-
-
-    # --- Broadcast Loop ---
-    while not stop_event.is_set():
+        # Try connecting to a public DNS server (doesn't actually send data)
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0)
+        s.connect(('8.8.8.8', 1)) # Google DNS
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        # Fallback if connection fails
         try:
-            # Send the broadcast message with the command PORT
-            broadcast_socket.sendto(message_payload, (broadcast_address, DISCOVERY_PORT))
-            # print(f"Sent discovery broadcast to {broadcast_address}:{DISCOVERY_PORT}") # Optional: reduce log spam
-        except socket.error as sock_err:
-             # Handle specific socket errors, e.g., network unreachable
-             print(f"Socket error sending discovery broadcast: {sock_err}")
-             # Avoid flooding logs if the network is down, maybe wait longer
-             stop_event.wait(BROADCAST_INTERVAL_SEC * 2) # Wait longer on error
-        except Exception as e:
-            print(f"Error sending discovery broadcast: {e}")
+            return socket.gethostbyname(socket.gethostname())
+        except socket.gaierror:
+            return "127.0.0.1" # Last resort
+
+# --- Global Zeroconf instance ---
+zeroconf = None
+service_info = None
+
+def register_mdns_service():
+    """Registers the StarButtonBox service using Zeroconf."""
+    global zeroconf, service_info
+    try:
+        zeroconf = Zeroconf(ip_version=IPVersion.V4Only) # Use IPv4 for simplicity
+
+        local_ip = get_local_ip()
+        if local_ip == "127.0.0.1":
+             print("Warning: Could not determine a non-loopback IP address. mDNS registration might fail or use loopback.")
+             sys.stdout.flush()
+             # Optionally, force a specific interface or handle this case differently
+
+        # Get hostname for the service name
+        host_name = socket.gethostname().split('.')[0] # Use just the hostname part
+        service_name = f"{host_name} StarButtonBox Server._starbuttonbox._udp.local." # More descriptive name
+
+        # Create ServiceInfo
+        service_info = ServiceInfo(
+            type_=MDNS_SERVICE_TYPE,
+            name=service_name,
+            addresses=[socket.inet_aton(local_ip)], # Provide IP address bytes
+            port=COMMAND_PORT,
+            properties={}, # No extra properties needed for now
+            server=f"{host_name}.local.", # Standard server name format
+        )
+
+        print(f"Registering mDNS service:")
+        print(f"  Name: {service_name}")
+        print(f"  Type: {MDNS_SERVICE_TYPE}")
+        print(f"  Address: {local_ip}")
+        print(f"  Port: {COMMAND_PORT}")
+        sys.stdout.flush()
+
+        zeroconf.register_service(service_info)
+        print("mDNS service registered successfully.")
+        sys.stdout.flush()
+
+    except Exception as e:
+        print(f"Error registering mDNS service: {e}")
+        sys.stdout.flush()
+        if zeroconf:
+            zeroconf.close()
+        zeroconf = None # Ensure it's None if registration failed
+
+def unregister_mdns_service():
+    """Unregisters the mDNS service and closes Zeroconf."""
+    global zeroconf, service_info
+    if zeroconf and service_info:
+        print("\nUnregistering mDNS service...")
+        sys.stdout.flush()
+        try:
+            zeroconf.unregister_service(service_info)
+            zeroconf.close()
+            print("mDNS service unregistered and Zeroconf closed.")
             sys.stdout.flush()
-        # Wait for the next interval or until stop_event is set
-        stop_event.wait(BROADCAST_INTERVAL_SEC) # Use wait() for interruptible sleep
+        except Exception as e:
+            print(f"Error unregistering mDNS service: {e}")
+            sys.stdout.flush()
+    elif zeroconf:
+        print("\nClosing Zeroconf (service likely not registered)...")
+        sys.stdout.flush()
+        zeroconf.close()
+    zeroconf = None
+    service_info = None
 
-    broadcast_socket.close()
-    print("Discovery broadcast thread stopped.")
+def handle_shutdown(signum, frame):
+    """Signal handler for graceful shutdown."""
+    print(f"\nReceived signal {signum}. Shutting down...")
     sys.stdout.flush()
-
+    # Unregister mDNS first
+    unregister_mdns_service()
+    # Exit the program
+    sys.exit(0)
 
 def main():
-    # Create a UDP socket for commands
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    # --- Register Signal Handlers ---
+    signal.signal(signal.SIGINT, handle_shutdown)  # Handle Ctrl+C
+    signal.signal(signal.SIGTERM, handle_shutdown) # Handle termination signal
 
-    # --- Start Discovery Thread ---
-    stop_event = threading.Event()
-    discovery_thread = threading.Thread(target=broadcast_discovery, args=(stop_event,), daemon=True)
-    discovery_thread.start()
-    # --------------------------
+    # --- Register mDNS Service ---
+    register_mdns_service()
+    if not zeroconf:
+        print("Failed to initialize mDNS. Exiting.")
+        sys.stdout.flush()
+        return # Exit if mDNS failed
+
+    # --- Command Server Socket ---
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     try:
         # Bind the command socket
-        server_socket.bind(('0.0.0.0', PORT))
-        print(f"UDP command server listening on port {PORT}...")
-        sys.stdout.flush() # Ensure print statements appear immediately
+        server_socket.bind(('0.0.0.0', COMMAND_PORT))
+        print(f"UDP command server listening on port {COMMAND_PORT}...")
+        sys.stdout.flush()
 
-        while True:
+        # --- Command Listening Loop ---
+        while True: # Loop indefinitely until shutdown signal
             try:
                 # Wait for a UDP command packet
                 data_bytes, addr = server_socket.recvfrom(BUFFER_SIZE)
@@ -322,28 +343,28 @@ def main():
             except UnicodeDecodeError:
                 print(f"    -> Error: Received data from {addr} could not be decoded as UTF-8.")
                 sys.stdout.flush()
+            except socket.timeout: # Should not happen unless timeout is set on command socket
+                 continue
             except Exception as loop_e:
                 print(f"    -> Error processing command packet from {addr}: {loop_e}")
                 sys.stdout.flush()
 
             sys.stdout.flush()
 
-    except KeyboardInterrupt:
-        print("\nCtrl+C detected. Shutting down...")
-        sys.stdout.flush()
     except Exception as e:
-        print(f"\nCritical error: Failed to start or run server: {e}")
+        print(f"\nCritical error running command server: {e}")
         sys.stdout.flush()
     finally:
-        # --- Stop Discovery Thread ---
-        print("Stopping discovery broadcast thread...")
-        sys.stdout.flush()
-        stop_event.set()
-        discovery_thread.join(timeout=2.0) # Wait for thread to finish gracefully
-        # --------------------------
-        server_socket.close()
-        print("Command server socket closed.")
-        sys.stdout.flush()
+        # --- Cleanup ---
+        # Signal handler calls unregister_mdns_service()
+        # Ensure command socket is closed if loop exits unexpectedly
+        if server_socket:
+            server_socket.close()
+            print("Command server socket closed.")
+            sys.stdout.flush()
+        # Ensure mDNS is unregistered even if signal handler didn't run (e.g., error before loop)
+        unregister_mdns_service()
+
 
 if __name__ == "__main__":
     main()
