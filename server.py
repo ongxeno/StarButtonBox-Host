@@ -5,71 +5,69 @@ import time
 import sys
 import threading
 import ipaddress
-from zeroconf import ServiceInfo, Zeroconf, IPVersion # Added zeroconf imports
-import signal # Added signal for graceful shutdown
+from zeroconf import ServiceInfo, Zeroconf, IPVersion
+import signal
 
 # --- Configuration ---
-COMMAND_PORT = 5005  # Port for receiving commands
+COMMAND_PORT = 5005  # Port for receiving commands and health checks
 BUFFER_SIZE = 1024
-# --- mDNS Configuration ---
-MDNS_SERVICE_TYPE = "_starbuttonbox._udp.local." # Standard service type format
-MDNS_SERVICE_NAME = "StarButtonBox Server._starbuttonbox._udp.local." # Unique name for this instance
+MDNS_SERVICE_TYPE = "_starbuttonbox._udp.local."
+MDNS_SERVICE_NAME = "StarButtonBox Server._starbuttonbox._udp.local." # Default, can be made more dynamic
 
-# --- Existing execute_key_event, execute_mouse_event, execute_mouse_scroll functions ---
-# [ ... keep existing functions execute_key_event, execute_mouse_event, execute_mouse_scroll ... ]
-# Ensure they use sys.stdout.flush() after prints if needed for immediate feedback.
+# --- Packet Types (mirroring Android's UdpPacketType) ---
+PACKET_TYPE_HEALTH_CHECK_PING = "HEALTH_CHECK_PING"
+PACKET_TYPE_HEALTH_CHECK_PONG = "HEALTH_CHECK_PONG"
+PACKET_TYPE_MACRO_COMMAND = "MACRO_COMMAND"
+PACKET_TYPE_MACRO_ACK = "MACRO_ACK"
+
+
+# --- Input Execution Functions (execute_key_event, execute_mouse_event, execute_mouse_scroll) ---
+# These functions remain the same as in the previous version.
+# For brevity, they are not repeated here but should be included from the previous artifact.
 def execute_key_event(data):
     """Handles 'key_event' actions (keyboard keys only) from the parsed JSON data."""
     key = data.get('key')
-    modifiers = data.get('modifiers', []) # Default to empty list
-    press_type_data = data.get('pressType', {}) # Default to empty dict
-    press_type = press_type_data.get('type', 'tap') # Default to 'tap'
-    duration_ms = press_type_data.get('durationMs') # Will be None if type is 'tap'
+    modifiers = data.get('modifiers', [])
+    press_type_data = data.get('pressType', {})
+    press_type = press_type_data.get('type', 'tap')
+    duration_ms = press_type_data.get('durationMs')
 
     if not key:
         print("    -> Error: 'key' field missing in key_event data.")
         sys.stdout.flush()
         return
 
-    # --- Modifier Key Handling ---
-    # Press down all modifier keys FIRST
     for mod_key in modifiers:
         try:
             pydirectinput.keyDown(mod_key)
         except Exception as mod_e:
             print(f"    -> Warning: Failed to press down modifier '{mod_key}': {mod_e}")
             sys.stdout.flush()
-
-    # --- Main Action Execution (Keyboard Keys Only) ---
     try:
-        # Handle as standard Keyboard Key Action
         if press_type == 'tap':
             print(f"    -> Simulating key tap: '{key}' with modifiers {modifiers}")
             sys.stdout.flush()
-            pydirectinput.press(key) # Modifiers already held
+            pydirectinput.press(key)
         elif press_type == 'hold' and duration_ms is not None:
             duration_sec = duration_ms / 1000.0
             if duration_sec <= 0:
                 print(f"    -> Warning: Invalid hold duration ({duration_ms}ms) for key '{key}'. Performing tap instead.")
                 sys.stdout.flush()
-                pydirectinput.press(key) # Modifiers already held
+                pydirectinput.press(key)
             else:
                 print(f"    -> Simulating key hold: '{key}' for {duration_sec:.2f}s with modifiers {modifiers}")
                 sys.stdout.flush()
-                pydirectinput.keyDown(key) # Modifiers already held
+                pydirectinput.keyDown(key)
                 time.sleep(duration_sec)
                 pydirectinput.keyUp(key)
         else:
             print(f"    -> Warning: Invalid pressType ('{press_type}') or missing durationMs for key '{key}'. Performing tap.")
             sys.stdout.flush()
-            pydirectinput.press(key) # Modifiers already held
-
+            pydirectinput.press(key)
     except Exception as action_e:
         print(f"    -> Error executing action for key '{key}': {action_e}")
         sys.stdout.flush()
-    finally: # Ensure modifiers are released even if action fails
-        # --- Modifier Key Handling (Release) ---
-        # Release modifiers AFTER main action is done
+    finally:
         for mod_key in reversed(modifiers):
             try:
                 pydirectinput.keyUp(mod_key)
@@ -77,21 +75,14 @@ def execute_key_event(data):
                 print(f"    -> Warning: Failed to release modifier '{mod_key}': {mod_e}")
                 sys.stdout.flush()
 
-
 def execute_mouse_event(data):
     """Handles 'mouse_event' actions from the parsed JSON data."""
     button_str = data.get('button')
     press_type_data = data.get('pressType', {})
     press_type = press_type_data.get('type', 'tap')
     duration_ms = press_type_data.get('durationMs')
-    modifiers = data.get('modifiers', []) # Get modifiers list
-
-    # Map button string from JSON ("LEFT", "RIGHT", "MIDDLE") to pydirectinput names
-    button_map = {
-        "LEFT": "left",
-        "RIGHT": "right",
-        "MIDDLE": "middle"
-    }
+    modifiers = data.get('modifiers', [])
+    button_map = {"LEFT": "left", "RIGHT": "right", "MIDDLE": "middle"}
     button = button_map.get(button_str)
 
     if not button:
@@ -99,8 +90,6 @@ def execute_mouse_event(data):
         sys.stdout.flush()
         return
 
-    # --- Modifier Key Handling ---
-    # Hold keyboard modifiers if present
     for mod_key in modifiers:
         try:
             pydirectinput.keyDown(mod_key)
@@ -109,8 +98,6 @@ def execute_mouse_event(data):
         except Exception as mod_e:
             print(f"    -> Warning: Failed to press down modifier '{mod_key}': {mod_e}")
             sys.stdout.flush()
-
-    # --- Main Mouse Action ---
     try:
         if press_type == 'tap':
             print(f"    -> Simulating mouse click: '{button}' button with modifiers {modifiers}")
@@ -132,13 +119,10 @@ def execute_mouse_event(data):
              print(f"    -> Warning: Invalid pressType ('{press_type}') or missing durationMs for mouse button '{button}'. Performing click.")
              sys.stdout.flush()
              pydirectinput.click(button=button)
-
     except Exception as mouse_e:
         print(f"    -> Error executing mouse action for button '{button}': {mouse_e}")
         sys.stdout.flush()
     finally:
-        # --- Modifier Key Handling (Release) ---
-        # Release keyboard modifiers if they were held
         for mod_key in reversed(modifiers):
             try:
                 pydirectinput.keyUp(mod_key)
@@ -148,23 +132,18 @@ def execute_mouse_event(data):
                 print(f"    -> Warning: Failed to release modifier '{mod_key}': {mod_e}")
                 sys.stdout.flush()
 
-
 def execute_mouse_scroll(data):
     """Handles 'mouse_scroll' actions from the parsed JSON data."""
     direction = data.get('direction')
-    clicks = data.get('clicks', 1) # Default to 1 click if not specified
-    modifiers = data.get('modifiers', []) # Get modifiers list
+    clicks = data.get('clicks', 1)
+    modifiers = data.get('modifiers', [])
+    scroll_amount = clicks if direction == "UP" else -clicks if direction == "DOWN" else 0
 
-    if direction == "UP":
-        scroll_amount = clicks
-    elif direction == "DOWN":
-        scroll_amount = -clicks # Negative value for scrolling down
-    else:
+    if scroll_amount == 0:
         print(f"    -> Error: Invalid or missing 'direction' field ('{direction}') in mouse_scroll data.")
         sys.stdout.flush()
         return
 
-    # --- Modifier Key Handling ---
     for mod_key in modifiers:
         try:
             pydirectinput.keyDown(mod_key)
@@ -173,8 +152,6 @@ def execute_mouse_scroll(data):
         except Exception as mod_e:
             print(f"    -> Warning: Failed to press down modifier '{mod_key}': {mod_e}")
             sys.stdout.flush()
-
-    # --- Main Scroll Action ---
     try:
         print(f"    -> Simulating mouse scroll: direction '{direction}', clicks {clicks} (amount {scroll_amount}) with modifiers {modifiers}")
         sys.stdout.flush()
@@ -183,7 +160,6 @@ def execute_mouse_scroll(data):
          print(f"    -> Error executing mouse scroll: {scroll_e}")
          sys.stdout.flush()
     finally:
-        # --- Modifier Key Handling (Release) ---
         for mod_key in reversed(modifiers):
             try:
                 pydirectinput.keyUp(mod_key)
@@ -193,25 +169,24 @@ def execute_mouse_scroll(data):
                 print(f"    -> Warning: Failed to release modifier '{mod_key}': {mod_e}")
                 sys.stdout.flush()
 
-# --- Function to get a non-loopback IP address ---
+# --- mDNS and Shutdown Handling (get_local_ip, register_mdns_service, unregister_mdns_service, handle_shutdown) ---
+# These functions remain the same as in the previous version.
+# For brevity, they are not repeated here but should be included from the previous artifact.
 def get_local_ip():
     """Attempts to find a non-loopback local IP address."""
     try:
-        # Try connecting to a public DNS server (doesn't actually send data)
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0)
-        s.connect(('8.8.8.8', 1)) # Google DNS
+        s.connect(('8.8.8.8', 1))
         ip = s.getsockname()[0]
         s.close()
         return ip
     except Exception:
-        # Fallback if connection fails
         try:
             return socket.gethostbyname(socket.gethostname())
         except socket.gaierror:
-            return "127.0.0.1" # Last resort
+            return "127.0.0.1"
 
-# --- Global Zeroconf instance ---
 zeroconf = None
 service_info = None
 
@@ -219,45 +194,38 @@ def register_mdns_service():
     """Registers the StarButtonBox service using Zeroconf."""
     global zeroconf, service_info
     try:
-        zeroconf = Zeroconf(ip_version=IPVersion.V4Only) # Use IPv4 for simplicity
-
+        zeroconf = Zeroconf(ip_version=IPVersion.V4Only)
         local_ip = get_local_ip()
         if local_ip == "127.0.0.1":
              print("Warning: Could not determine a non-loopback IP address. mDNS registration might fail or use loopback.")
              sys.stdout.flush()
-             # Optionally, force a specific interface or handle this case differently
 
-        # Get hostname for the service name
-        host_name = socket.gethostname().split('.')[0] # Use just the hostname part
-        service_name = f"{host_name} StarButtonBox Server._starbuttonbox._udp.local." # More descriptive name
+        host_name = socket.gethostname().split('.')[0]
+        service_name_str = f"{host_name} StarButtonBox Server._starbuttonbox._udp.local."
 
-        # Create ServiceInfo
         service_info = ServiceInfo(
             type_=MDNS_SERVICE_TYPE,
-            name=service_name,
-            addresses=[socket.inet_aton(local_ip)], # Provide IP address bytes
+            name=service_name_str,
+            addresses=[socket.inet_aton(local_ip)],
             port=COMMAND_PORT,
-            properties={}, # No extra properties needed for now
-            server=f"{host_name}.local.", # Standard server name format
+            properties={},
+            server=f"{host_name}.local.",
         )
-
         print(f"Registering mDNS service:")
-        print(f"  Name: {service_name}")
+        print(f"  Name: {service_name_str}")
         print(f"  Type: {MDNS_SERVICE_TYPE}")
         print(f"  Address: {local_ip}")
         print(f"  Port: {COMMAND_PORT}")
         sys.stdout.flush()
-
         zeroconf.register_service(service_info)
         print("mDNS service registered successfully.")
         sys.stdout.flush()
-
     except Exception as e:
         print(f"Error registering mDNS service: {e}")
         sys.stdout.flush()
         if zeroconf:
             zeroconf.close()
-        zeroconf = None # Ensure it's None if registration failed
+        zeroconf = None
 
 def unregister_mdns_service():
     """Unregisters the mDNS service and closes Zeroconf."""
@@ -284,87 +252,145 @@ def handle_shutdown(signum, frame):
     """Signal handler for graceful shutdown."""
     print(f"\nReceived signal {signum}. Shutting down...")
     sys.stdout.flush()
-    # Unregister mDNS first
     unregister_mdns_service()
-    # Exit the program
     sys.exit(0)
 
-def main():
-    # --- Register Signal Handlers ---
-    signal.signal(signal.SIGINT, handle_shutdown)  # Handle Ctrl+C
-    signal.signal(signal.SIGTERM, handle_shutdown) # Handle termination signal
 
-    # --- Register mDNS Service ---
+def main():
+    signal.signal(signal.SIGINT, handle_shutdown)
+    signal.signal(signal.SIGTERM, handle_shutdown)
+
     register_mdns_service()
     if not zeroconf:
         print("Failed to initialize mDNS. Exiting.")
         sys.stdout.flush()
-        return # Exit if mDNS failed
+        return
 
-    # --- Command Server Socket ---
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     try:
-        # Bind the command socket
         server_socket.bind(('0.0.0.0', COMMAND_PORT))
-        print(f"UDP command server listening on port {COMMAND_PORT}...")
+        print(f"UDP command and health check server listening on port {COMMAND_PORT}...")
         sys.stdout.flush()
 
-        # --- Command Listening Loop ---
-        while True: # Loop indefinitely until shutdown signal
+        while True:
             try:
-                # Wait for a UDP command packet
                 data_bytes, addr = server_socket.recvfrom(BUFFER_SIZE)
                 json_string = data_bytes.decode('utf-8').strip()
-                print(f"\nReceived command data: '{json_string}' from {addr}")
-                sys.stdout.flush()
+                # print(f"\nReceived raw data: '{json_string}' from {addr}") # Debug
+                # sys.stdout.flush()
 
-                # Parse the JSON string
                 try:
-                    action_data = json.loads(json_string)
+                    packet_data = json.loads(json_string)
                 except json.JSONDecodeError as json_e:
-                    print(f"    -> Error: Invalid JSON received: {json_e}")
+                    print(f"    -> Error: Invalid JSON received from {addr}: {json_e}")
                     sys.stdout.flush()
                     continue
 
-                # Determine action type and execute
-                action_type = action_data.get('type')
+                packet_type = packet_data.get('type')
+                packet_id = packet_data.get('packetId')
+                payload_str = packet_data.get('payload') # This is the stringified InputAction JSON
 
-                if action_type == 'key_event':
-                    execute_key_event(action_data)
-                elif action_type == 'mouse_event':
-                    execute_mouse_event(action_data)
-                elif action_type == 'mouse_scroll':
-                    execute_mouse_scroll(action_data)
+                if packet_type == PACKET_TYPE_HEALTH_CHECK_PING:
+                    print(f"  -> Received HEALTH_CHECK_PING (ID: {packet_id}) from {addr}")
+                    sys.stdout.flush()
+                    if packet_id:
+                        pong_packet = {
+                            "packetId": packet_id,
+                            "timestamp": int(time.time() * 1000),
+                            "type": PACKET_TYPE_HEALTH_CHECK_PONG,
+                            "payload": None
+                        }
+                        try:
+                            server_socket.sendto(json.dumps(pong_packet).encode('utf-8'), addr)
+                            print(f"    -> Sent HEALTH_CHECK_PONG (ID: {packet_id}) to {addr}")
+                            sys.stdout.flush()
+                        except Exception as send_e:
+                            print(f"    -> Error sending PONG: {send_e}")
+                            sys.stdout.flush()
+                    else:
+                        print(f"    -> Warning: HEALTH_CHECK_PING from {addr} missing packetId.")
+                        sys.stdout.flush()
+
+                elif packet_type == PACKET_TYPE_MACRO_COMMAND:
+                    print(f"  -> Received MACRO_COMMAND (ID: {packet_id}, Has Payload: {payload_str is not None}) from {addr}")
+                    sys.stdout.flush()
+                    ack_sent = False
+                    if payload_str:
+                        try:
+                            action_data = json.loads(payload_str) # The payload IS the action_data
+                            action_subtype = action_data.get('type') # This is the inner type like 'key_event'
+
+                            if action_subtype == 'key_event':
+                                execute_key_event(action_data)
+                            elif action_subtype == 'mouse_event':
+                                execute_mouse_event(action_data)
+                            elif action_subtype == 'mouse_scroll':
+                                execute_mouse_scroll(action_data)
+                            else:
+                                print(f"    -> Warning: Unknown action subtype '{action_subtype}' in MACRO_COMMAND payload from {addr}.")
+                                sys.stdout.flush()
+                        except json.JSONDecodeError as e:
+                            print(f"    -> Error decoding MACRO_COMMAND payload: {e}")
+                            sys.stdout.flush()
+                        except Exception as e:
+                            print(f"    -> Error processing MACRO_COMMAND payload: {e}")
+                            sys.stdout.flush()
+                        finally:
+                            # Send ACK regardless of payload processing success, as long as packet_id is present
+                            if packet_id:
+                                ack_packet = {
+                                    "packetId": packet_id,
+                                    "timestamp": int(time.time() * 1000),
+                                    "type": PACKET_TYPE_MACRO_ACK,
+                                    "payload": None # No payload needed for ACK
+                                }
+                                try:
+                                    server_socket.sendto(json.dumps(ack_packet).encode('utf-8'), addr)
+                                    print(f"    -> Sent MACRO_ACK (ID: {packet_id}) to {addr}")
+                                    sys.stdout.flush()
+                                    ack_sent = True
+                                except Exception as send_e:
+                                    print(f"    -> Error sending MACRO_ACK for ID {packet_id}: {send_e}")
+                                    sys.stdout.flush()
+                    else:
+                        print(f"    -> Warning: MACRO_COMMAND from {addr} missing payload.")
+                        sys.stdout.flush()
+                    
+                    if not ack_sent and packet_id: # If payload was missing but we have an ID, still try to ACK
+                         print(f"    -> MACRO_COMMAND (ID: {packet_id}) had missing payload, but sending ACK anyway.")
+                         sys.stdout.flush()
+                         ack_packet = { "packetId": packet_id, "timestamp": int(time.time() * 1000), "type": PACKET_TYPE_MACRO_ACK, "payload": None }
+                         try:
+                             server_socket.sendto(json.dumps(ack_packet).encode('utf-8'), addr)
+                             print(f"    -> Sent MACRO_ACK (ID: {packet_id}) to {addr} despite missing payload.")
+                             sys.stdout.flush()
+                         except Exception as send_e:
+                             print(f"    -> Error sending MACRO_ACK for ID {packet_id} (missing payload case): {send_e}")
+                             sys.stdout.flush()
+
+
                 else:
-                    print(f"    -> Warning: Unknown action type '{action_type}' received.")
+                    print(f"    -> Warning: Unknown packet type '{packet_type}' received from {addr}.")
                     sys.stdout.flush()
 
             except UnicodeDecodeError:
                 print(f"    -> Error: Received data from {addr} could not be decoded as UTF-8.")
                 sys.stdout.flush()
-            except socket.timeout: # Should not happen unless timeout is set on command socket
-                 continue
             except Exception as loop_e:
-                print(f"    -> Error processing command packet from {addr}: {loop_e}")
+                print(f"    -> Error processing packet from {addr}: {loop_e}")
                 sys.stdout.flush()
-
             sys.stdout.flush()
 
     except Exception as e:
         print(f"\nCritical error running command server: {e}")
         sys.stdout.flush()
     finally:
-        # --- Cleanup ---
-        # Signal handler calls unregister_mdns_service()
-        # Ensure command socket is closed if loop exits unexpectedly
         if server_socket:
             server_socket.close()
             print("Command server socket closed.")
             sys.stdout.flush()
-        # Ensure mDNS is unregistered even if signal handler didn't run (e.g., error before loop)
         unregister_mdns_service()
-
 
 if __name__ == "__main__":
     main()
