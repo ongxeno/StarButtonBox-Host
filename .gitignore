@@ -2,3 +2,5 @@ __pycache__/config.cpython-311.pyc
 __pycache__/dialog_handler.cpython-311.pyc
 __pycache__/input_simulator.cpython-311.pyc
 __pycache__/mdns_handler.cpython-311.pyc
+server.py
+__pycache__/auto_drag_handler.cpython-311.pyc
