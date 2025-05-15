@@ -40,7 +40,7 @@ The server features a graphical user interface (GUI) for configuration and statu
 * `mdns_handler.py`: Manages mDNS/Zeroconf service registration and unregistration.
 * `dialog_handler.py`: Handles triggering the PC's web browser, primarily for the "Import Layout from PC" feature.
 * `config.py`: Stores static configuration constants like default port numbers and packet type definitions.
-* `firewall_handler.py` (Optional/Legacy): A utility module for interacting with Windows Firewall via `netsh`. (Note: The primary firewall interaction method was shifted to triggering the system's prompt.)
+* `firewall_handler.py` (Optional/Legacy): A utility module for interacting with Windows Firewall via `netsh`.
 
 ## Setup & Dependencies
 
@@ -50,7 +50,7 @@ The server features a graphical user interface (GUI) for configuration and statu
     ```bash
     pip install pydirectinput pyautogui keyboard zeroconf pystray Pillow
     ```
-    You can also create a `requirements.txt` file with the following content and run `pip install -r requirements.txt`:
+    Alternatively, create a `requirements.txt` file with the following content and run `pip install -r requirements.txt`:
     ```
     pydirectinput
     pyautogui
@@ -62,7 +62,7 @@ The server features a graphical user interface (GUI) for configuration and statu
 
 ## Configuration
 
-The server's settings are managed through its GUI and stored in `server_settings.json`. This file is typically located in your user's `APPDATA` directory (e.g., `C:\Users\<YourUser>\AppData\Roaming\StarButtonBoxServer\server_settings.json`).
+The server's settings are managed through its GUI and stored in `server_settings.json`. This file is typically created in your user's `APPDATA` directory (e.g., `C:\Users\<YourUser>\AppData\Roaming\StarButtonBoxServer\server_settings.json`) when the application is first run or when settings are saved.
 
 Editable settings via the GUI include:
 * **Server Port:** The UDP port the server listens on.
@@ -78,7 +78,7 @@ Editable settings via the GUI include:
    ```bash
    python server_gui.py
    ```
-   You can also start it minimized if you've previously enabled the setting or by passing an argument (though the argument is mainly for the packaged version when launched by the registry):
+   To start minimized (if the setting is enabled or for testing the argument):
    ```bash
    python server_gui.py --start-minimized
    ```
@@ -96,27 +96,25 @@ PyInstaller is used to package the Python application into a standalone Windows 
     ```
 
 2.  **Prepare Assets:**
-    * Ensure you have an application icon file named `icon.ico` in your project's root directory (where `StarButtonBoxServer.spec` will be).
+    * Ensure you have an application icon file named `icon.ico` in your project's root directory (the same directory where `StarButtonBoxServer.spec` will be).
     * Ensure you have a tray icon file named `tray_icon.png` in your project's root directory.
 
-3.  **Use the `.spec` File:**
-    A `.spec` file provides the most control for PyInstaller. Create a file named `StarButtonBoxServer.spec` in your project's root directory with the following content:
+3.  **Create the `.spec` File:**
+    Create a file named `StarButtonBoxServer.spec` in your project's root directory with the following content. This file tells PyInstaller how to build your application.
 
     ```python
     # StarButtonBoxServer.spec
     # -*- mode: python ; coding: utf-8 -*-
 
-    # PyInstaller will run this spec file from the directory where the spec file is located.
-    # Paths for 'datas' and 'icon' can be relative to this spec file's location.
+    # This .spec file assumes it is located in the root of your project directory,
+    # alongside server_gui.py, icon.ico, and tray_icon.png.
 
     a = Analysis(
-        ['server_gui.py'], # Your main GUI script, relative to where this .spec file is
-        pathex=['.'], # Search for scripts in the current directory (where .spec is)
+        ['server_gui.py'], # Main GUI script
+        pathex=['.'],      # Search for scripts in the current directory (where .spec is)
         binaries=[],
         datas=[
-            # Add data files here. Format: ('source_path_relative_to_spec', 'destination_folder_in_bundle')
-            # The destination '.' means the root of the bundled app directory.
-            ('tray_icon.png', '.'), 
+            ('tray_icon.png', '.'), # Bundles tray_icon.png into the app's root
         ],
         hiddenimports=[
             'pystray', 'pystray._win32',
@@ -128,6 +126,7 @@ PyInstaller is used to package the Python application into a standalone Windows 
             'logging.handlers', 'pkg_resources', 'pkg_resources.py2_warn',
             'threading', 'socket', 'json', 'time', 'sys', 'os', 'signal',
             'concurrent', 'concurrent.futures',
+            # Add other modules here if ModuleNotFoundError occurs when running the .exe
         ],
         hookspath=[],
         hooksconfig={},
@@ -148,14 +147,14 @@ PyInstaller is used to package the Python application into a standalone Windows 
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
-        upx=True, # Set to False if you don't have UPX or encounter issues
-        console=False, # Essential for GUI applications
+        upx=True,        # Compresses the executable; set to False if issues arise or UPX not installed
+        console=False,   # Essential for GUI applications (no command window)
         disable_windowed_traceback=False,
         argv_emulation=False,
         target_arch=None,
         codesign_identity=None,
         entitlements_file=None,
-        icon='icon.ico' # Relative path for app icon (assumes icon.ico is in the same dir as .spec)
+        icon='icon.ico'  # Assumes icon.ico is in the same directory as this .spec file
     )
 
     coll = COLLECT(
@@ -165,29 +164,42 @@ PyInstaller is used to package the Python application into a standalone Windows 
         strip=False,
         upx=True,
         upx_exclude=[],
-        name='StarButtonBoxServer',
+        name='StarButtonBoxServer', # Name of the output folder in 'dist'
     )
     ```
-    **Important Changes & Assumptions:**
-    * **No `project_root` variable needed:** The paths are now directly relative.
-    * **`pathex=['.']`**: PyInstaller will look for `server_gui.py` in the same directory as the `.spec` file.
-    * **`datas=[('tray_icon.png', '.')]`**: Assumes `tray_icon.png` is in the same directory as the `.spec` file.
-    * **`icon='icon.ico'`**: Assumes `icon.ico` is in the same directory as the `.spec` file.
-    * **Crucial:** You **must** run the `pyinstaller` command from the directory where your `.spec` file and these assets (`server_gui.py`, `icon.ico`, `tray_icon.png`, and other `.py` modules) are located. Typically, this is your project's root directory.
 
 4.  **Build the Executable:**
-    Open a command prompt or PowerShell, **navigate to your project's root directory** (where `StarButtonBoxServer.spec` is), and run:
+    Open a command prompt or PowerShell, navigate to your project's root directory (where `StarButtonBoxServer.spec` is located), and run:
     ```bash
     pyinstaller --noconfirm StarButtonBoxServer.spec
     ```
+    The `--noconfirm` option prevents PyInstaller from asking for confirmation if it needs to overwrite existing build files.
 
 5.  **Output:**
-    The packaged application will be in the `dist\StarButtonBoxServer` folder.
+    The packaged application will be in the `dist\StarButtonBoxServer` folder. The main executable is `StarButtonBoxServer.exe`.
 
 ## Using the Server Application
 
-(Instructions remain the same as before)
+1.  Run `StarButtonBoxServer.exe` (or `python server_gui.py` if running from source).
+2.  The GUI window will appear (unless "Start minimized" is enabled).
+3.  **Configure Settings via GUI:**
+    * Set the desired **Server Port**. Click "Apply & Restart" if you change it.
+    * Toggle **mDNS Discovery**. Click "Apply & Restart" if you change it.
+    * Enable **Start Server with Windows** if desired.
+    * Configure **Minimize to tray on close (X)** and **Start application minimized to system tray** preferences.
+4.  **Start the Server:** Click the "Start Server" button. Status indicators should update.
+5.  **System Tray:** The application will have an icon in the system tray. Right-click it for options to show/hide the settings window, start/stop the server, or quit the application.
+6.  **Android App:** Ensure your StarButtonBox Android app is on the same local network and configured to connect to the PC's IP address and the server port. If mDNS is working, the Android app should be able to discover the server automatically.
 
 ## Troubleshooting
 
-(Troubleshooting advice remains the same as before)
+* **Log File:** The primary source for troubleshooting is `server.log`. It's typically located in `%APPDATA%\StarButtonBoxServer` when running the packaged `.exe`, or in the script's directory when running `python server_gui.py`.
+* **Windows Firewall:** When `StarButtonBoxServer.exe` is run for the first time and attempts network operations, Windows Firewall will likely prompt for permission.
+    * **Ensure you "Allow access"**, especially for **"Private networks"**.
+    * If you miss the prompt or deny it, you'll need to manually add an inbound rule in "Windows Defender Firewall with Advanced Security" for the `StarButtonBoxServer.exe` program.
+* **Connectivity Issues with `.exe`:** If the server works when run as a Python script but not as an `.exe`, common causes include:
+    * Windows Firewall blocking the `.exe`.
+    * PyInstaller missing a hidden dependency. To diagnose, temporarily edit the `.spec` file to set `console=True` in the `EXE` section, rebuild, and run the `.exe`. A console window will appear and show Python tracebacks (like `ModuleNotFoundError`). Add missing modules to the `hiddenimports` list in the `.spec` file and rebuild.
+    * Incorrect paths to bundled data files (e.g., `tray_icon.png`). Ensure the `datas` section in your `.spec` file is correct and your code uses a method like `system_tray_handler._get_resource_path()` for bundled files.
+* **Port in Use:** If the server fails to start and logs indicate the port is already in use, ensure no other application (including another instance of StarButtonBoxServer) is using that port.
+
