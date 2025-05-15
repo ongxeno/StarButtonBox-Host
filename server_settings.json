@@ -1,0 +1,6 @@
+{
+    "server_port": 5055,
+    "mdns_enabled": true,
+    "autostart_enabled": false,
+    "executable_path_for_autostart": "c:\\Users\\ppong\\VSCodeProject\\StarButtonBoxPC\\config_manager.py"
+}
