@@ -3,83 +3,79 @@
 
 import socket
 import sys
-import ipaddress # Not strictly needed here anymore, but good practice
+# import ipaddress # Not strictly needed here anymore, but good practice
 from zeroconf import ServiceInfo, Zeroconf, IPVersion
 import config # Import constants from config.py
+import logging
+
+logger = logging.getLogger("StarButtonBoxMDNS") # Specific logger for this module
 
 # --- Module-level variables for Zeroconf instance and service info ---
-# This keeps the state within this module.
 _zeroconf_instance = None
 _service_info_instance = None
 
 def get_local_ip():
     """Attempts to find a non-loopback local IPv4 address."""
-    # Try connecting to an external host (doesn't send data)
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0)
-        # Use a known public DNS server
-        s.connect(('8.8.8.8', 1))
+        s.connect(('8.8.8.8', 1)) # Doesn't send data
         ip = s.getsockname()[0]
         s.close()
         if ip and ip != '127.0.0.1':
             return ip
     except Exception:
-        pass # Ignore errors and try the next method
+        pass 
 
-    # Fallback to gethostbyname
     try:
         hostname = socket.gethostname()
         ip = socket.gethostbyname(hostname)
         if ip and ip != '127.0.0.1':
             return ip
     except socket.gaierror:
-        pass # Ignore errors if hostname resolution fails
+        pass 
 
-    # Last resort fallback
-    print("Warning (mdns_handler): Could not determine a non-loopback IP address. Using 127.0.0.1.", file=sys.stderr)
-    sys.stdout.flush()
+    logger.warning("Could not determine a non-loopback IP address. Using 127.0.0.1.")
     return "127.0.0.1"
 
 def register_mdns_service():
     """Registers the StarButtonBox service using Zeroconf."""
     global _zeroconf_instance, _service_info_instance
     if _zeroconf_instance:
-        print("Warning (mdns_handler): mDNS service already registered or registration in progress.", file=sys.stderr)
-        sys.stdout.flush()
-        return True # Indicate it might already be okay
+        logger.warning("mDNS service already registered or registration in progress.")
+        return True 
 
     try:
         _zeroconf_instance = Zeroconf(ip_version=IPVersion.V4Only)
         local_ip = get_local_ip()
 
-        host_name = socket.gethostname().split('.')[0] or "StarButtonBoxPC" # Fallback hostname
-        # Construct dynamic service name
+        host_name = socket.gethostname().split('.')[0] or "StarButtonBoxPC"
         service_name_str = f"{host_name} StarButtonBox Server.{config.MDNS_SERVICE_TYPE}"
 
         _service_info_instance = ServiceInfo(
             type_=config.MDNS_SERVICE_TYPE,
             name=service_name_str,
-            addresses=[socket.inet_aton(local_ip)], # Requires bytes
+            addresses=[socket.inet_aton(local_ip)], 
             port=config.COMMAND_PORT,
-            properties={}, # No specific properties needed for now
-            server=f"{host_name}.local.", # Standard mDNS server naming
+            properties={}, 
+            server=f"{host_name}.local.", 
         )
-        print(f"Registering mDNS service:")
-        print(f"  Name: {service_name_str}")
-        print(f"  Type: {config.MDNS_SERVICE_TYPE}")
-        print(f"  Address: {local_ip}")
-        print(f"  Port: {config.COMMAND_PORT}")
-        sys.stdout.flush()
+        logger.info(f"Registering mDNS service:")
+        logger.info(f"  Name: {service_name_str}")
+        logger.info(f"  Type: {config.MDNS_SERVICE_TYPE}")
+        logger.info(f"  Address: {local_ip}")
+        logger.info(f"  Port: {config.COMMAND_PORT}")
+        
         _zeroconf_instance.register_service(_service_info_instance)
-        print("mDNS service registered successfully.")
-        sys.stdout.flush()
+        logger.info("mDNS service registered successfully.")
         return True
     except Exception as e:
-        print(f"Error registering mDNS service: {e}", file=sys.stderr)
-        sys.stdout.flush()
+        logger.error(f"Error registering mDNS service: {e}")
         if _zeroconf_instance:
-            _zeroconf_instance.close()
+            try:
+                _zeroconf_instance.close()
+            except Exception as close_e:
+                logger.error(f"Error closing Zeroconf instance during register_mdns_service error handling: {close_e}")
         _zeroconf_instance = None
         _service_info_instance = None
         return False
@@ -88,34 +84,48 @@ def unregister_mdns_service():
     """Unregisters the mDNS service and closes Zeroconf."""
     global _zeroconf_instance, _service_info_instance
     if _zeroconf_instance and _service_info_instance:
-        print("\nUnregistering mDNS service...")
-        sys.stdout.flush()
+        logger.info("Unregistering mDNS service...")
         try:
             _zeroconf_instance.unregister_service(_service_info_instance)
-            # Close should happen after unregistering
         except Exception as e:
-            print(f"Error during mDNS service unregistration: {e}", file=sys.stderr)
-            sys.stdout.flush()
-        # Always try to close zeroconf if it exists
+            logger.error(f"Error during mDNS service unregistration: {e}")
+        
         try:
             _zeroconf_instance.close()
-            print("mDNS service unregistered and Zeroconf closed.")
-            sys.stdout.flush()
+            logger.info("mDNS service unregistered and Zeroconf closed.")
         except Exception as e:
-            print(f"Error closing Zeroconf: {e}", file=sys.stderr)
-            sys.stdout.flush()
+            logger.error(f"Error closing Zeroconf: {e}")
 
     elif _zeroconf_instance:
-        # If service_info was somehow None but zeroconf exists
-        print("\nClosing Zeroconf (service likely not registered)...")
-        sys.stdout.flush()
+        logger.info("Closing Zeroconf (service likely not registered or already unregistered)...")
         try:
             _zeroconf_instance.close()
         except Exception as e:
-            print(f"Error closing Zeroconf: {e}", file=sys.stderr)
-            sys.stdout.flush()
+            logger.error(f"Error closing Zeroconf (when service_info was None): {e}")
 
-    # Reset module variables
     _zeroconf_instance = None
     _service_info_instance = None
 
+if __name__ == '__main__':
+    # Setup basic console logging for testing this module directly
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO,
+                        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
+    logger_test_main = logging.getLogger("MDNSHandlerTest")
+
+    logger_test_main.info("--- Testing mDNS Handler ---")
+    if register_mdns_service():
+        logger_test_main.info("mDNS service registration initiated (check with mDNS browser).")
+        logger_test_main.info("Press Ctrl+C to unregister and exit test.")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger_test_main.info("\nKeyboard interrupt received.")
+        finally:
+            unregister_mdns_service()
+            logger_test_main.info("mDNS test finished.")
+    else:
+        logger_test_main.error("Failed to register mDNS service during test.")
+
+ 
