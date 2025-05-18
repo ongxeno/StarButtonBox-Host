@@ -1,5 +1,7 @@
 # StarButtonBox PC Server
 
+[Archieved Repository] I've decide to merge the server repository into Android application repository. You can see more at https://github.com/ongxeno/StarButtonBox-Android/tree/main/server
+
 This Python application is the server-side component of the StarButtonBox system. It runs on a Windows PC, listens for commands from the StarButtonBox Android application, and simulates keyboard/mouse inputs to control games, primarily designed for Star Citizen.
 
 The server features a graphical user interface (GUI) for configuration and status monitoring.
